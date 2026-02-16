@@ -1,0 +1,63 @@
+//@version=5
+indicator("BTC Chaos Dual Mode Engine", overlay=true)
+
+// ───────────── EMAs ─────────────
+ema21  = ta.ema(close, 21)
+ema55  = ta.ema(close, 55)
+ema100 = ta.ema(close, 100)
+ema200 = ta.ema(close, 200)
+
+// ───────────── 1. Directional Efficiency ─────────────
+lengthEff = 20
+netMove = math.abs(close - close[lengthEff])
+totalMove = 0.0
+for i = 0 to lengthEff - 1
+    totalMove += math.abs(close[i] - close[i+1])
+
+efficiency = totalMove != 0 ? netMove / totalMove : 0
+
+trendRegime = efficiency > 0.4
+
+// ───────────── 2. Wick Dominance ─────────────
+body = math.abs(close - open)
+upperWick = high - math.max(close, open)
+lowerWick = math.min(close, open) - low
+
+wickRatio = body != 0 ? (upperWick + lowerWick) / body : 0
+
+sweepCondition = wickRatio > 2
+
+// ───────────── 3. Range Persistence ─────────────
+atr = ta.atr(14)
+largeRange = (high - low) > atr * 1.2
+rangePersistence = ta.sum(largeRange ? 1 : 0, 5)
+
+impulseCondition = rangePersistence >= 3
+
+// ───────────── Final Regime Decision ─────────────
+isTrend = trendRegime and impulseCondition and not sweepCondition
+isSweep = not trendRegime or sweepCondition
+
+// ───────────── Trend Logic ─────────────
+bullStructure = ema21 > ema55 and ema55 > ema100
+bearStructure = ema21 < ema55 and ema55 < ema100
+
+trendBuy  = isTrend and bullStructure and close > ema55
+trendSell = isTrend and bearStructure and close < ema55
+
+// ───────────── Mean Reversion Logic ─────────────
+mrBuy  = isSweep and close < ema21 and wickRatio > 2
+mrSell = isSweep and close > ema21 and wickRatio > 2
+
+// ───────────── Plot EMAs ─────────────
+plot(ema21,  color=color.teal,   linewidth=2)
+plot(ema55,  color=color.orange, linewidth=2)
+plot(ema100, color=color.blue,   linewidth=2)
+plot(ema200, color=color.red,    linewidth=2)
+
+// ───────────── Signals ─────────────
+plotshape(trendBuy,  location=location.belowbar, style=shape.triangleup,   color=color.green, size=size.small)
+plotshape(trendSell, location=location.abovebar, style=shape.triangledown, color=color.red,   size=size.small)
+
+plotshape(mrBuy,  location=location.belowbar, style=shape.circle, color=color.lime, size=size.tiny)
+plotshape(mrSell, location=location.abovebar, style=shape.circle, color=color.maroon, size=size.tiny)
