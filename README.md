@@ -2,6 +2,9 @@
 
 A regime-aware Bitcoin trading indicator built using chaos theory principles,
 market microstructure, and nonlinear statistics.
+Comes from [Link to file](./ACTUAL_FIRE.pine)
+Use this link to install in tradingview
+https://www.tradingview.com/script/hYN7vmaI-BTC-Chaos-Dual-Mode-Engine/
 
 This system is **Bitcoin-only** and designed for **BTCUSDT perpetuals**.
 It avoids prediction and instead classifies **market state** before trading.
