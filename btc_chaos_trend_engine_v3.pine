@@ -1,0 +1,108 @@
+//@version=5
+indicator("BTCUSDT.P Chaos Trend Engine v3 (stable plots)", overlay=true, max_labels_count=100)
+
+// --------------------
+// Inputs
+// --------------------
+restrictToBTC = input.bool(true, "Restrict to BTC symbols")
+htf           = input.timeframe("240", "HTF filter timeframe")
+
+lenHurst      = input.int(64, "Hurst length", minval=20)
+lagHurst      = input.int(8, "Hurst lag", minval=2)
+lenChop       = input.int(21, "Choppiness length", minval=10)
+lenADX        = input.int(14, "ADX length", minval=5)
+
+emaFastLen    = input.int(34, "LTF EMA fast", minval=2)
+emaSlowLen    = input.int(89, "LTF EMA slow", minval=2)
+emaHTFFastLen = input.int(34, "HTF EMA fast", minval=2)
+emaHTFSlowLen = input.int(89, "HTF EMA slow", minval=2)
+
+atrLen        = input.int(14, "ATR length", minval=5)
+atrMult       = input.float(1.2, "ATR breakout multiplier", step=0.1)
+lookbackBreak = input.int(20, "Breakout lookback", minval=5)
+
+hurstMin      = input.float(0.53, "Hurst min", step=0.01)
+chopMax       = input.float(56.0, "Choppiness max", step=0.5)
+adxMin        = input.float(18.0, "ADX min", step=0.5)
+
+showBreakouts = input.bool(true, "Show breakout bands")
+maxDistancePc = input.float(20.0, "Hide breakout band if > X% from close", step=1.0, minval=1.0)
+
+// --------------------
+// Guards
+// --------------------
+isBTC  = str.contains(str.upper(syminfo.ticker), "BTC")
+allow  = restrictToBTC ? isBTC : true
+
+// --------------------
+// Core series
+// --------------------
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+
+emaFastHTF = request.security(syminfo.tickerid, htf, ta.ema(close, emaHTFFastLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+emaSlowHTF = request.security(syminfo.tickerid, htf, ta.ema(close, emaHTFSlowLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+bullHTF = emaFastHTF > emaSlowHTF
+bearHTF = emaFastHTF < emaSlowHTF
+
+// Hurst proxy
+ret1  = math.log(close / close[1])
+retL  = math.log(close / close[lagHurst])
+std1  = ta.stdev(ret1, lenHurst)
+stdL  = ta.stdev(retL, lenHurst)
+hurst = (std1 > 0 and stdL > 0 and lagHurst > 1) ? (math.log(stdL / std1) / math.log(lagHurst)) : na
+
+// Choppiness
+trSum = math.sum(ta.tr(true), lenChop)
+hh    = ta.highest(high, lenChop)
+ll    = ta.lowest(low, lenChop)
+chop  = (hh > ll and lenChop > 1) ? 100.0 * math.log10(trSum / (hh - ll)) / math.log10(lenChop) : na
+
+// ADX (manual for compatibility)
+upMove   = high - high[1]
+downMove = low[1] - low
+plusDM   = (upMove > downMove and upMove > 0) ? upMove : 0.0
+minusDM  = (downMove > upMove and downMove > 0) ? downMove : 0.0
+trRma    = ta.rma(ta.tr(true), lenADX)
+plusDI   = trRma == 0 ? 0 : 100 * ta.rma(plusDM, lenADX) / trRma
+minusDI  = trRma == 0 ? 0 : 100 * ta.rma(minusDM, lenADX) / trRma
+dx       = (plusDI + minusDI == 0) ? 0 : 100 * math.abs(plusDI - minusDI) / (plusDI + minusDI)
+adx      = ta.rma(dx, lenADX)
+
+regimeOK = (hurst > hurstMin) and (chop < chopMax) and (adx > adxMin)
+
+// Breakout trigger
+atr        = ta.atr(atrLen)
+upperBreak = ta.highest(high, lookbackBreak)[1] + atr * atrMult
+lowerBreak = ta.lowest(low, lookbackBreak)[1] - atr * atrMult
+
+bullLTF = emaFast > emaSlow
+bearLTF = emaFast < emaSlow
+
+buySignal  = allow and regimeOK and bullHTF and bullLTF and ta.crossover(close, upperBreak)
+sellSignal = allow and regimeOK and bearHTF and bearLTF and ta.crossunder(close, lowerBreak)
+
+// --------------------
+// Stable plotting (no persistent line/label objects)
+// --------------------
+plot(emaFast, "EMA Fast", color=color.new(color.teal, 0), linewidth=2)
+plot(emaSlow, "EMA Slow", color=color.new(color.orange, 0), linewidth=2)
+
+maxDistance = maxDistancePc * 0.01
+upperVisible = showBreakouts and not na(upperBreak) and math.abs(upperBreak - close) / close <= maxDistance
+lowerVisible = showBreakouts and not na(lowerBreak) and math.abs(lowerBreak - close) / close <= maxDistance
+
+plot(upperVisible ? upperBreak : na, "Upper Break", color=color.new(color.lime, 60), style=plot.style_linebr, linewidth=1)
+plot(lowerVisible ? lowerBreak : na, "Lower Break", color=color.new(color.red, 60), style=plot.style_linebr, linewidth=1)
+
+plotshape(buySignal, title="BUY", style=shape.labelup, location=location.belowbar, color=color.lime, text="BUY", textcolor=color.black, size=size.tiny)
+plotshape(sellSignal, title="SELL", style=shape.labeldown, location=location.abovebar, color=color.red, text="SELL", textcolor=color.white, size=size.tiny)
+
+// Optional diagnostics (Data Window only)
+plot(hurst, "Hurst", display=display.data_window, color=color.purple)
+plot(chop, "Choppiness", display=display.data_window, color=color.gray)
+plot(adx, "ADX", display=display.data_window, color=color.blue)
+
+alertcondition(buySignal, "BTC Chaos BUY", "BUY {{ticker}} {{interval}}")
+alertcondition(sellSignal, "BTC Chaos SELL", "SELL {{ticker}} {{interval}}")
