@@ -32,7 +32,7 @@ chopOrAbsorb  = math.abs(oiDelta) <= 0.1 * math.abs(priceDelta) // example thres
 flowColor =
      newLongs      ? color.lime :
      newShorts     ? color.red :
-     shortsClosing ? color.green :
+     shortsClosing ? color.purple :
      longsClosing  ? color.orange :
      chopOrAbsorb  ? color.gray :
      color.gray
@@ -41,24 +41,17 @@ flowColor =
 // OI Delta Histogram
 plot(oiDelta, style=plot.style_columns, color=flowColor, title="OI Delta")
 
-// Bitfinex Longs/Shorts Delta Histogram
-plot(deltaLongs - deltaShorts, style=plot.style_columns, color=color.purple, title="Bitfinex LS Delta")
-
 // Zero Line
 hline(0, "Zero", color=color.white)
 
 // --- MARKINGS ---
 // New Longs Entering
-plotshape(newLongs, title="New Longs Entering", style=shape.triangleup, color=color.lime, size=size.small, location=location.belowbar)
+plotshape(newLongs, title="New Longs Entering", style=shape.triangleup, color=color.lime, size=size.small, location=location.top)
 
-// New Shorts Entering
-plotshape(newShorts, title="New Shorts Entering", style=shape.triangledown, color=color.red, size=size.small, location=location.abovebar)
+plotshape(newShorts, title="New Shorts Entering", style=shape.triangledown, color=color.red, size=size.small, location=location.top)
 
-// Shorts Closing
-plotshape(shortsClosing, title="Shorts Closing", style=shape.triangleup, color=color.green, size=size.small, location=location.belowbar)
+plotshape(shortsClosing, title="Shorts Closing", style=shape.triangleup, color=color.purple, size=size.small, location=location.bottom)
 
-// Longs Closing
-plotshape(longsClosing, title="Longs Closing", style=shape.triangledown, color=color.orange, size=size.small, location=location.abovebar)
+plotshape(longsClosing, title="Longs Closing", style=shape.triangledown, color=color.orange, size=size.small,location=location.bottom)
 
-// Chop / Absorption
-plotshape(chopOrAbsorb, title="Chop / Absorption", style=shape.xcross, color=color.gray, size=size.tiny, location=location.top)
+plotshape(chopOrAbsorb, title="Chop / Absorption", style=shape.xcross, color=color.gray, size=size.tiny, location.absolute)
