@@ -1,0 +1,187 @@
+//@version=5
+indicator("Watson + Vector", overlay = true, max_lines_count = 500, max_labels_count = 500, max_bars_back=500,max_boxes_count=500)
+
+//indicator('Vector Candles', overlay=true, max_bars_back=300,, max_lines_count=500, max_labels_count=500)
+
+//------------------------------------------------------------------------------
+//Settings
+//-----------------------------------------------------------------------------{
+h = input.float(8.,'Bandwidth', minval = 0)
+mult = input.float(3., minval = 0)
+src = input(close, 'Source')
+
+repaint = input(true, 'Repainting Smoothing', tooltip = 'Repainting is an effect where the indicators historical output is subject to change over time. Disabling repainting will cause the indicator to output the endpoints of the calculations')
+
+//Style
+upCss = input.color(color.teal, 'Colors', inline = 'inline1', group = 'Style')
+dnCss = input.color(color.red, '', inline = 'inline1', group = 'Style')
+
+//-----------------------------------------------------------------------------}
+//Functions
+//-----------------------------------------------------------------------------{
+//Gaussian window
+gauss(x, h) => math.exp(-(math.pow(x, 2)/(h * h * 2)))
+
+//-----------------------------------------------------------------------------}
+//Append lines
+//-----------------------------------------------------------------------------{
+n = bar_index
+
+var ln = array.new_line(0) 
+
+if barstate.isfirst and repaint
+    for i = 0 to 499
+        array.push(ln,line.new(na,na,na,na))
+
+//-----------------------------------------------------------------------------}
+//End point method
+//-----------------------------------------------------------------------------{
+var coefs = array.new_float(0)
+var den = 0.
+
+if barstate.isfirst and not repaint
+    for i = 0 to 499
+        w = gauss(i, h)
+        coefs.push(w)
+
+    den := coefs.sum()
+
+out = 0.
+if not repaint
+    for i = 0 to 499
+        out += src[i] * coefs.get(i)
+out /= den
+mae = ta.sma(math.abs(src - out), 499) * mult
+
+upper = out + mae
+lower = out - mae
+ 
+//-----------------------------------------------------------------------------}
+//Compute and display NWE
+//-----------------------------------------------------------------------------{
+float y2 = na
+float y1 = na
+
+nwe = array.new<float>(0)
+if barstate.islast and repaint
+    sae = 0.
+    //Compute and set NWE point 
+    for i = 0 to math.min(499,n - 1)
+        sum = 0.
+        sumw = 0.
+        //Compute weighted mean 
+        for j = 0 to math.min(499,n - 1)
+            w = gauss(i - j, h)
+            sum += src[j] * w
+            sumw += w
+
+        y2 := sum / sumw
+        sae += math.abs(src[i] - y2)
+        nwe.push(y2)
+    
+    sae := sae / math.min(499,n - 1) * mult
+    for i = 0 to math.min(499,n - 1)
+        if i%2
+            line.new(n-i+1, y1 + sae, n-i, nwe.get(i) + sae, color = upCss)
+            line.new(n-i+1, y1 - sae, n-i, nwe.get(i) - sae, color = dnCss)
+        
+        if src[i] > nwe.get(i) + sae and src[i+1] < nwe.get(i) + sae
+            label.new(n-i, src[i], '▼', color = color(na), style = label.style_label_down, textcolor = dnCss, textalign = text.align_center)
+        if src[i] < nwe.get(i) - sae and src[i+1] > nwe.get(i) - sae
+            label.new(n-i, src[i], '▲', color = color(na), style = label.style_label_up, textcolor = upCss, textalign = text.align_center)
+        
+        y1 := nwe.get(i)
+
+//-----------------------------------------------------------------------------}
+//Dashboard
+//-----------------------------------------------------------------------------{
+var tb = table.new(position.top_right, 1, 1
+  , bgcolor = #1e222d
+  , border_color = #373a46
+  , border_width = 1
+  , frame_color = #373a46
+  , frame_width = 1)
+
+if repaint
+    tb.cell(0, 0, 'Repainting Mode Enabled', text_color = color.white, text_size = size.small)
+
+//-----------------------------------------------------------------------------}
+//Plot
+//-----------------------------------------------------------------------------}
+plot(repaint ? na : out + mae, 'Upper', upCss)
+plot(repaint ? na : out - mae, 'Lower', dnCss)
+
+//Crossing Arrows
+plotshape(ta.crossunder(close, out - mae) ? low : na, "Crossunder", shape.labelup, location.absolute, color(na), 0 , text = '▲', textcolor = upCss, size = size.tiny)
+plotshape(ta.crossover(close, out + mae) ? high : na, "Crossover", shape.labeldown, location.absolute, color(na), 0 , text = '▼', textcolor = dnCss, size = size.tiny)
+
+//-----------------------------------------------------------------------------}
+
+
+// ------------
+// | PVSRA    |
+// ------------
+
+//inputs
+bool overridesym = input.bool(group='PVSRA', title='Override chart symbol?', defval=false, inline='pvsra')
+string pvsra_sym = input.symbol(group='PVSRA', title='', defval='INDEX:BTCUSD', tooltip='You can use INDEX:BTCUSD or you can combine multiple feeds, for example \'(BINANCE:BTCUSDT+COINBASE:BTCUSD)\'. Note that adding too many will slow things down.', inline='pvsra')
+
+// PVSRA
+pvsra_security(sresolution, sseries) =>
+    request.security(overridesym ? pvsra_sym : syminfo.tickerid, sresolution, sseries[barstate.isrealtime ? 1 : 0], barmerge.gaps_off, barmerge.lookahead_off)
+pvsra_security_1 = pvsra_security('', volume)
+pvsra_volume = overridesym == true ? pvsra_security_1 : volume
+pvsra_security_2 = pvsra_security('', high)
+pvsra_high = overridesym == true ? pvsra_security_2 : high
+pvsra_security_3 = pvsra_security('', low)
+pvsra_low = overridesym == true ? pvsra_security_3 : low
+pvsra_security_4 = pvsra_security('', close)
+pvsra_close = overridesym == true ? pvsra_security_4 : close
+pvsra_security_5 = pvsra_security('', open)
+pvsra_open = overridesym == true ? pvsra_security_5 : open
+
+
+// The below math matches MT4 PVSRA indicator source
+// average volume from last 10 candles
+sum_1 = math.sum(pvsra_volume, 10)
+sum_2 = math.sum(volume, 10)
+av = overridesym == true ? sum_1 / 10 : sum_2 / 10
+//climax volume on the previous candle
+value2 = overridesym == true ? pvsra_volume * (pvsra_high - pvsra_low) : volume * (high - low)
+// highest climax volume of the last 10 candles
+hivalue2 = ta.highest(value2, 10)
+// VA value determines the bar color. va = 0: normal. va = 1: climax.  va = 2: rising
+iff_1 = pvsra_volume >= av * 1.5 ? 2 : 0
+iff_2 = pvsra_volume >= av * 2 or value2 >= hivalue2 ? 1 : iff_1
+iff_3 = volume >= av * 1.5 ? 2 : 0
+iff_4 = volume >= av * 2 or value2 >= hivalue2 ? 1 : iff_3
+va = overridesym == true ? iff_2 : iff_4
+
+// Bullish or bearish coloring
+isBull = overridesym == true ? pvsra_close > pvsra_open : close > open
+
+CUColor = color.lime  // Climax up (bull) bull and bear both start with b so it would be weird hence up down
+CDColor = color.red  // Climax down (bear)
+
+AUColor = color.rgb(33, 170, 255)  //Avobe average up (bull)
+ADColor = color.fuchsia  //Above average down (bear))
+
+NUColor = #9b9b9b
+NDColor = #414141
+
+// candleColor = iff(climax,iff(isBull,CUColor,CDColor),iff(aboveA,iff(isBull,AUColor,ADColor),iff(isBull,NUColor,NDColor)))
+iff_5 = va == 2 ? AUColor : NUColor
+iff_6 = va == 1 ? CUColor : iff_5
+iff_7 = va == 2 ? ADColor : NDColor
+iff_8 = va == 1 ? CDColor : iff_7
+candleColor = isBull ? iff_6 : iff_8
+barcolor(candleColor)
+
+redGreen = candleColor ==  color.lime and candleColor[1] == color.red
+greenRed = candleColor ==  color.red and candleColor[1] == color.lime
+redBlue = candleColor ==  color.blue and candleColor[1] == color.red
+blueRed = candleColor ==  color.red and candleColor[1] == color.blue
+greenPurpule = candleColor ==  color.fuchsia and candleColor[1] == color.lime
+purpleGreen = candleColor ==  color.lime and candleColor[1] == color.fuchsia
+bluePurpule = candleColor ==  color.fuchsia and candleColor[1] == color.blue
+purpleBlue = candleColor ==  color.blue and candleColor[1] == color.fuchsia
