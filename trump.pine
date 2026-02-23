@@ -1,0 +1,64 @@
+//@version=6
+indicator("BTC Flow with Flow Markings (Bitfinex + OI)", overlay=false)
+
+// === SETTINGS ===
+symbolPriceOI = "BINANCE:BTCUSDT.P"           // Price + OI source
+symbolLongs   = "BITFINEX:BTCUSDLONGS"       // Bitfinex longs
+symbolShorts  = "BITFINEX:BTCUSDSHORTS"      // Bitfinex shorts
+
+// === PRICE & OI DATA ===
+price = request.security(symbolPriceOI, timeframe.period, close)
+oi = request.security("BINANCE:BTCUSDT.P_OI", timeframe.period, close)
+
+// === BITFINEX LONGS/SHORTS ===
+longs  = request.security(symbolLongs, timeframe.period, close)
+shorts = request.security(symbolShorts, timeframe.period, close)
+
+// --- DELTAS ---
+oiDelta      = oi - oi[1]
+priceDelta   = price - price[1]
+deltaLongs   = longs - longs[1]
+deltaShorts  = shorts - shorts[1]
+
+// --- FLOW CLASSIFICATION ---
+// Standard flow logic
+newLongs      = priceDelta > 0 and oiDelta > 0
+newShorts     = priceDelta < 0 and oiDelta > 0
+shortsClosing = priceDelta > 0 and oiDelta < 0
+longsClosing  = priceDelta < 0 and oiDelta < 0
+chopOrAbsorb  = math.abs(oiDelta) <= 0.1 * math.abs(priceDelta) // example threshold for absorption
+
+// --- FLOW COLORS ---
+flowColor =
+     newLongs      ? color.lime :
+     newShorts     ? color.red :
+     shortsClosing ? color.green :
+     longsClosing  ? color.orange :
+     chopOrAbsorb  ? color.gray :
+     color.gray
+
+// --- PLOTS ---
+// OI Delta Histogram
+plot(oiDelta, style=plot.style_columns, color=flowColor, title="OI Delta")
+
+// Bitfinex Longs/Shorts Delta Histogram
+plot(deltaLongs - deltaShorts, style=plot.style_columns, color=color.purple, title="Bitfinex LS Delta")
+
+// Zero Line
+hline(0, "Zero", color=color.white)
+
+// --- MARKINGS ---
+// New Longs Entering
+plotshape(newLongs, title="New Longs Entering", style=shape.triangleup, color=color.lime, size=size.small, location=location.belowbar)
+
+// New Shorts Entering
+plotshape(newShorts, title="New Shorts Entering", style=shape.triangledown, color=color.red, size=size.small, location=location.abovebar)
+
+// Shorts Closing
+plotshape(shortsClosing, title="Shorts Closing", style=shape.triangleup, color=color.green, size=size.small, location=location.belowbar)
+
+// Longs Closing
+plotshape(longsClosing, title="Longs Closing", style=shape.triangledown, color=color.orange, size=size.small, location=location.abovebar)
+
+// Chop / Absorption
+plotshape(chopOrAbsorb, title="Chop / Absorption", style=shape.xcross, color=color.gray, size=size.tiny, location=location.top)
