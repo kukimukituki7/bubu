@@ -6,15 +6,17 @@ indicator("Watson + Vector", overlay = true, max_lines_count = 500, max_labels_c
 //------------------------------------------------------------------------------
 //Settings
 //-----------------------------------------------------------------------------{
-h = input.float(8.,'Bandwidth', minval = 0)
-mult = input.float(3., minval = 0)
-src = input(close, 'Source')
+grpWatson = "🟣 Watson"
 
-repaint = input(true, 'Repainting Smoothing', tooltip = 'Repainting is an effect where the indicators historical output is subject to change over time. Disabling repainting will cause the indicator to output the endpoints of the calculations')
+h = input.float(8.,'Bandwidth', minval = 0, group=grpWatson)
+mult = input.float(3., minval = 0, group=grpWatson)
+src = input(close, 'Source', group=grpWatson)
+
+repaint = input(true, 'Repainting Smoothing', tooltip = 'Repainting is an effect where the indicators historical output is subject to change over time. Disabling repainting will cause the indicator to output the endpoints of the calculations', group=grpWatson)
 
 //Style
-upCss = input.color(color.teal, 'Colors', inline = 'inline1', group = 'Style')
-dnCss = input.color(color.red, '', inline = 'inline1', group = 'Style')
+upCss = input.color(color.teal, 'Colors', inline = 'inline1', group=grpWatson)
+dnCss = input.color(color.red, '', inline = 'inline1', group=grpWatson)
 
 //-----------------------------------------------------------------------------}
 //Functions
@@ -92,9 +94,9 @@ if barstate.islast and repaint
         
         y1 := nwe.get(i)
 
-//-----------------------------------------------------------------------------}
-//Dashboard
-//-----------------------------------------------------------------------------{
+//-----------------------------------------------------------------------------
+// Watson Dashboard
+//-----------------------------------------------------------------------------
 var tb = table.new(position.top_right, 1, 1
   , bgcolor = #1e222d
   , border_color = #373a46
@@ -105,9 +107,9 @@ var tb = table.new(position.top_right, 1, 1
 if repaint
     tb.cell(0, 0, 'Repainting Mode Enabled', text_color = color.white, text_size = size.small)
 
-//-----------------------------------------------------------------------------}
-//Plot
-//-----------------------------------------------------------------------------}
+//-----------------------------------------------------------------------------
+// Watson Plot
+//-----------------------------------------------------------------------------
 plot(repaint ? na : out + mae, 'Upper', upCss)
 plot(repaint ? na : out - mae, 'Lower', dnCss)
 
@@ -115,31 +117,143 @@ plot(repaint ? na : out - mae, 'Lower', dnCss)
 plotshape(ta.crossunder(close, out - mae) ? low : na, "Crossunder", shape.labelup, location.absolute, color(na), 0 , text = '▲', textcolor = upCss, size = size.tiny)
 plotshape(ta.crossover(close, out + mae) ? high : na, "Crossover", shape.labeldown, location.absolute, color(na), 0 , text = '▼', textcolor = dnCss, size = size.tiny)
 
-//-----------------------------------------------------------------------------}
+//-----------------------------------------------------------------------------
 
-//------------------------------------------------------------------------------
-// OI DELTA (from trump.pine)
-//------------------------------------------------------------------------------
-symbolPriceOI = "BINANCE:BTCUSDT.P"
-symbolOI      = "BINANCE:BTCUSDT.P_OI"
-symbolLongs   = "BITFINEX:BTCUSDLONGS"
-symbolShorts  = "BITFINEX:BTCUSDSHORTS"
 
-price = request.security(symbolPriceOI, timeframe.period, close)
-oi = request.security(symbolOI, timeframe.period, close)
+// ------------
+// | PVSRA    |
+// ------------
 
+//inputs
+bool overridesym = input.bool(group='PVSRA', title='Override chart symbol?', defval=false, inline='pvsra')
+string pvsra_sym = input.symbol(group='PVSRA', title='', defval='INDEX:BTCUSD', tooltip='You can use INDEX:BTCUSD or you can combine multiple feeds, for example \'(BINANCE:BTCUSDT+COINBASE:BTCUSD)\'. Note that adding too many will slow things down.', inline='pvsra')
+
+// PVSRA
+pvsra_security(sresolution, sseries) =>
+    request.security(overridesym ? pvsra_sym : syminfo.tickerid, sresolution, sseries[barstate.isrealtime ? 1 : 0], barmerge.gaps_off, barmerge.lookahead_off)
+pvsra_security_1 = pvsra_security('', volume)
+pvsra_volume = overridesym == true ? pvsra_security_1 : volume
+pvsra_security_2 = pvsra_security('', high)
+pvsra_high = overridesym == true ? pvsra_security_2 : high
+pvsra_security_3 = pvsra_security('', low)
+pvsra_low = overridesym == true ? pvsra_security_3 : low
+pvsra_security_4 = pvsra_security('', close)
+pvsra_close = overridesym == true ? pvsra_security_4 : close
+pvsra_security_5 = pvsra_security('', open)
+pvsra_open = overridesym == true ? pvsra_security_5 : open
+
+
+// The below math matches MT4 PVSRA indicator source
+// average volume from last 10 candles
+sum_1 = math.sum(pvsra_volume, 10)
+sum_2 = math.sum(volume, 10)
+av = overridesym == true ? sum_1 / 10 : sum_2 / 10
+//climax volume on the previous candle
+value2 = overridesym == true ? pvsra_volume * (pvsra_high - pvsra_low) : volume * (high - low)
+// highest climax volume of the last 10 candles
+hivalue2 = ta.highest(value2, 10)
+// VA value determines the bar color. va = 0: normal. va = 1: climax.  va = 2: rising
+iff_1 = pvsra_volume >= av * 1.5 ? 2 : 0
+iff_2 = pvsra_volume >= av * 2 or value2 >= hivalue2 ? 1 : iff_1
+iff_3 = volume >= av * 1.5 ? 2 : 0
+iff_4 = volume >= av * 2 or value2 >= hivalue2 ? 1 : iff_3
+va = overridesym == true ? iff_2 : iff_4
+
+// Bullish or bearish coloring
+isBull = overridesym == true ? pvsra_close > pvsra_open : close > open
+
+CUColor = color.lime  // Climax up (bull) bull and bear both start with b so it would be weird hence up down
+CDColor = color.red  // Climax down (bear)
+
+AUColor = color.rgb(33, 170, 255)  //Avobe average up (bull)
+ADColor = color.fuchsia  //Above average down (bear))
+
+NUColor = #9b9b9b
+NDColor = #414141
+
+// candleColor = iff(climax,iff(isBull,CUColor,CDColor),iff(aboveA,iff(isBull,AUColor,ADColor),iff(isBull,NUColor,NDColor)))
+iff_5 = va == 2 ? AUColor : NUColor
+iff_6 = va == 1 ? CUColor : iff_5
+iff_7 = va == 2 ? ADColor : NDColor
+iff_8 = va == 1 ? CDColor : iff_7
+candleColor = isBull ? iff_6 : iff_8
+barcolor(candleColor)
+
+redGreen = candleColor ==  color.lime and candleColor[1] == color.red
+greenRed = candleColor ==  color.red and candleColor[1] == color.lime
+redBlue = candleColor ==  color.blue and candleColor[1] == color.red
+blueRed = candleColor ==  color.red and candleColor[1] == color.blue
+greenPurpule = candleColor ==  color.fuchsia and candleColor[1] == color.lime
+purpleGreen = candleColor ==  color.lime and candleColor[1] == color.fuchsia
+bluePurpule = candleColor ==  color.fuchsia and candleColor[1] == color.blue
+purpleBlue = candleColor ==  color.blue and candleColor[1] == color.fuchsia
+
+
+// ------------------------------------------------------------------------------
+// | Open interest delta |
+// ------------------------------------------------------------------------------
+
+// === SETTINGS ===
+grpLiqOI = "💧 Liq + OI"
+
+liqPct = input.float(1.0, "Liq %", minval=0.1, maxval=5, group=grpLiqOI)
+showPriceLiq = input.bool(true, "Show Price Entry Liqs", group=grpLiqOI)
+showSwingLiq = input.bool(true, "Show Swing Liqs", group=grpLiqOI)
+swingLookback = input.int(5, "Swing Lookback", minval=1, maxval=20, group=grpLiqOI)
+oiOffsetVal = input.int(2000, "OI Offset", minval=100, maxval=10000, group=grpLiqOI)
+symbolLongs   = "BITFINEX:BTCUSDLONGS"       // Bitfinex longs
+symbolShorts  = "BITFINEX:BTCUSDSHORTS"      // Bitfinex shorts
+
+// === PRICE & OI DATA ===
+price = request.security("BINANCE:BTCUSDT.P", timeframe.period, close)
+oi = request.security("BINANCE:BTCUSDT.P_OI", timeframe.period, close)
+
+// === BITFINEX LONGS/SHORTS ===
 longs  = request.security(symbolLongs, timeframe.period, close)
 shorts = request.security(symbolShorts, timeframe.period, close)
 
-oiDelta    = oi - oi[1]
-priceDelta = price - price[1]
+// --- DELTAS ---
+oiDelta      = oi - oi[1]
+priceDelta   = price - price[1]
+deltaLongs   = longs - longs[1]
+deltaShorts  = shorts - shorts[1]
 
+// --- FLOW CLASSIFICATION ---
 newLongs      = priceDelta > 0 and oiDelta > 0
 newShorts     = priceDelta < 0 and oiDelta > 0
 shortsClosing = priceDelta > 0 and oiDelta < 0
 longsClosing  = priceDelta < 0 and oiDelta < 0
 chopOrAbsorb  = math.abs(oiDelta) <= 0.1 * math.abs(priceDelta)
 
+var float longEntryPrice = na
+var float shortEntryPrice = na
+var int longEntryBar = na
+var int shortEntryBar = na
+
+if newLongs
+    longEntryPrice := price
+    longEntryBar := bar_index
+
+if newShorts
+    shortEntryPrice := price
+    shortEntryBar := bar_index
+
+// Liquidation levels
+longLiq = not na(longEntryPrice) ? longEntryPrice * (1 - liqPct / 100) : na
+shortLiq = not na(shortEntryPrice) ? shortEntryPrice * (1 + liqPct / 100) : na
+
+// === SWING LIQUIDATION LEVELS ===
+swingHigh = ta.highest(high, swingLookback)
+swingLow = ta.lowest(low, swingLookback)
+
+longSwingLiq = showSwingLiq ? swingLow * (1 - liqPct / 100) : na
+shortSwingLiq = showSwingLiq ? swingHigh * (1 + liqPct / 100) : na
+
+// Check if underwater
+longsUnderwater = not na(longEntryPrice) and price < longEntryPrice
+shortsUnderwater = not na(shortEntryPrice) and price > shortEntryPrice
+
+// --- FLOW COLORS ---
 flowColor =
      newLongs      ? color.lime :
      newShorts     ? color.red :
@@ -148,59 +262,37 @@ flowColor =
      chopOrAbsorb  ? color.gray :
      color.gray
 
-oiOffset = src - 5000
-plotcandle(oiOffset, oiOffset + oiDelta, oiOffset, oiOffset, title="OI Delta", color=flowColor)
+// === OI DELTA PLOT ===
+lowest = ta.lowest(low, 50)
+oiOffset = lowest - oiOffsetVal
 
-hline(0, "Zero", color=color.white)
+// Plot candle with delta as the wick (open=offset, close=offset+delta)
+plotcandle(oiOffset, oiOffset + oiDelta, oiOffset, oiOffset + oiDelta, title="OI Delta", color=flowColor, bordercolor=color.new(flowColor, 70), wickcolor=color.new(flowColor, 70))
 
-plotarrow(newLongs ? oiDelta : 0, title="New Longs", colorup=color.lime, maxheight=20)
-plotarrow(newShorts ? oiDelta : 0, title="New Shorts", colordown=color.red, maxheight=20)
-plotarrow(shortsClosing ? oiDelta : 0, title="Shorts Closing", colorup=color.purple, maxheight=20)
-plotarrow(longsClosing ? oiDelta : 0, title="Longs Closing", colordown=color.orange, maxheight=20)
+// Also plot delta as histogram for visibility, offset
+plot(oiOffset + oiDelta, style=plot.style_line, color=color.new(flowColor, 70), title="OI Delta Hist", linewidth = 3)
 
-plotshape(chopOrAbsorb, title="Chop / Absorption", style=shape.xcross, color=color.gray, size=size.tiny)
+// --- ARROWS ---
+plotarrow(newLongs and not chopOrAbsorb ? oiDelta : 0, title="New Longs Arrow", colorup=color.lime)
+plotarrow(newShorts and not chopOrAbsorb ? oiDelta : 0, title="New Shorts Arrow", colorup=color.red)
+plotarrow(shortsClosing and not chopOrAbsorb ? oiDelta : 0, title="Shorts Closing Arrow", colordown=color.purple)
+plotarrow(longsClosing and not chopOrAbsorb ? oiDelta : 0, title="Longs Closing Arrow", colordown=color.orange)
 
-//------------------------------------------------------------------------------
-// PVSRA - Vector Candles
-//------------------------------------------------------------------------------
-bool overridesym = input.bool(false, group='PVSRA', title='Override chart symbol?', inline='pvsra')
-string pvsra_sym = input.symbol('INDEX:BTCUSD', group='PVSRA', title='', inline='pvsra')
+// --- CHOP MARKER ---
+plotshape(chopOrAbsorb, title="Chop / Absorption", style=shape.xcross, color=color.gray, size=size.tiny, location=location.belowbar)
 
-pvsra_security(sresolution, sseries) =>
-    request.security(overridesym ? pvsra_sym : syminfo.tickerid, sresolution, sseries[barstate.isrealtime ? 1 : 0], barmerge.gaps_off, barmerge.lookahead_off)
+// --- UNDERWATER ZONES ---
+bgcolor(longsUnderwater ? color.new(color.red, 90) : na, title="Longs Underwater Zone")
+bgcolor(shortsUnderwater ? color.new(color.green, 90) : na, title="Shorts Underwater Zone")
 
-pvsra_volume = overridesym ? pvsra_security('', volume) : volume
-pvsra_high   = overridesym ? pvsra_security('', high) : high
-pvsra_low    = overridesym ? pvsra_security('', low) : low
-pvsra_close  = overridesym ? pvsra_security('', close) : close
-pvsra_open   = overridesym ? pvsra_security('', open) : open
+// Show entry prices (last only)
+plot(showPriceLiq ? longEntryPrice : na, title="Long Entry", color=color.lime, style=plot.style_stepline, linewidth=1)
+plot(showPriceLiq ? shortEntryPrice : na, title="Short Entry", color=color.red, style=plot.style_stepline, linewidth=1)
 
-sum_1 = math.sum(pvsra_volume, 10)
-sum_2 = math.sum(volume, 10)
-av = overridesym ? sum_1 / 10 : sum_2 / 10
-value2 = overridesym ? pvsra_volume * (pvsra_high - pvsra_low) : volume * (high - low)
-hivalue2 = ta.highest(value2, 10)
+// Show liquidation levels
+plot(showPriceLiq ? longLiq : na, title="Long Liq", color=color.orange, style=plot.style_stepline, linewidth=1)
+plot(showPriceLiq ? shortLiq : na, title="Short Liq", color=color.purple, style=plot.style_stepline, linewidth=1)
 
-iff_1 = pvsra_volume >= av * 1.5 ? 2 : 0
-iff_2 = pvsra_volume >= av * 2 or value2 >= hivalue2 ? 1 : iff_1
-iff_3 = volume >= av * 1.5 ? 2 : 0
-iff_4 = volume >= av * 2 or value2 >= hivalue2 ? 1 : iff_3
-va = overridesym ? iff_2 : iff_4
-
-isBull = overridesym ? pvsra_close > pvsra_open : close > open
-
-CUColor = color.lime
-CDColor = color.red
-AUColor = color.rgb(33, 170, 255)
-ADColor = color.fuchsia
-NUColor = #9b9b9b
-NDColor = #414141
-
-iff_5 = va == 2 ? AUColor : NUColor
-iff_6 = va == 1 ? CUColor : iff_5
-iff_7 = va == 2 ? ADColor : NDColor
-iff_8 = va == 1 ? CDColor : iff_7
-candleColor = isBull ? iff_6 : iff_8
-
-barcolor(candleColor)
-
+// Show swing liquidation levels
+plot(showSwingLiq ? longSwingLiq : na, title="Long Swing Liq", color=color.orange, style=plot.style_stepline, linewidth=2)
+plot(showSwingLiq ? shortSwingLiq : na, title="Short Swing Liq", color=color.purple, style=plot.style_stepline, linewidth=2)
