@@ -1,13 +1,16 @@
 //@version=6
-indicator("BTC Flow with Flow Markings (Bitfinex + OI)", overlay=false)
+indicator("BTC Flow with Flow Markings (Bitfinex + OI)", overlay=true)
 
 // === SETTINGS ===
-symbolPriceOI = "BINANCE:BTCUSDT.P"           // Price + OI source
+liqPct = input.float(1.0, "Liq %", minval=0.1, maxval=5)
+showPriceLiq = input.bool(true, "Show Price Entry Liqs", group="Liquidation Settings")
+showSwingLiq = input.bool(true, "Show Swing Liqs", group="Liquidation Settings")
+swingLookback = input.int(5, "Swing Lookback", minval=1, maxval=20, group="Liquidation Settings")
 symbolLongs   = "BITFINEX:BTCUSDLONGS"       // Bitfinex longs
 symbolShorts  = "BITFINEX:BTCUSDSHORTS"      // Bitfinex shorts
 
 // === PRICE & OI DATA ===
-price = request.security(symbolPriceOI, timeframe.period, close)
+price = request.security("BINANCE:BTCUSDT.P", timeframe.period, close)
 oi = request.security("BINANCE:BTCUSDT.P_OI", timeframe.period, close)
 
 // === BITFINEX LONGS/SHORTS ===
@@ -21,12 +24,39 @@ deltaLongs   = longs - longs[1]
 deltaShorts  = shorts - shorts[1]
 
 // --- FLOW CLASSIFICATION ---
-// Standard flow logic
 newLongs      = priceDelta > 0 and oiDelta > 0
 newShorts     = priceDelta < 0 and oiDelta > 0
 shortsClosing = priceDelta > 0 and oiDelta < 0
 longsClosing  = priceDelta < 0 and oiDelta < 0
-chopOrAbsorb  = math.abs(oiDelta) <= 0.1 * math.abs(priceDelta) // example threshold for absorption
+chopOrAbsorb  = math.abs(oiDelta) <= 0.1 * math.abs(priceDelta)
+
+var float longEntryPrice = na
+var float shortEntryPrice = na
+var int longEntryBar = na
+var int shortEntryBar = na
+
+if newLongs
+    longEntryPrice := price
+    longEntryBar := bar_index
+
+if newShorts
+    shortEntryPrice := price
+    shortEntryBar := bar_index
+
+// Liquidation levels
+longLiq = not na(longEntryPrice) ? longEntryPrice * (1 - liqPct / 100) : na
+shortLiq = not na(shortEntryPrice) ? shortEntryPrice * (1 + liqPct / 100) : na
+
+// === SWING LIQUIDATION LEVELS ===
+swingHigh = ta.highest(high, swingLookback)
+swingLow = ta.lowest(low, swingLookback)
+
+longSwingLiq = showSwingLiq ? swingLow * (1 - liqPct / 100) : na
+shortSwingLiq = showSwingLiq ? swingHigh * (1 + liqPct / 100) : na
+
+// Check if underwater
+longsUnderwater = not na(longEntryPrice) and price < longEntryPrice
+shortsUnderwater = not na(shortEntryPrice) and price > shortEntryPrice
 
 // --- FLOW COLORS ---
 flowColor =
@@ -37,21 +67,34 @@ flowColor =
      chopOrAbsorb  ? color.gray :
      color.gray
 
-// --- PLOTS ---
-// OI Delta Histogram
-plot(oiDelta, style=plot.style_columns, color=flowColor, title="OI Delta")
+// === OI DELTA PLOT ===
+lowest = ta.lowest(low, 50)
+oiOffset = lowest - 2000
 
-// Zero Line
-hline(0, "Zero", color=color.white)
+// Plot candle with delta as the wick (open=offset, close=offset+delta)
+plotcandle(oiOffset, oiOffset + oiDelta, oiOffset, oiOffset + oiDelta, title="OI Delta", color=flowColor, bordercolor=color.new(flowColor, 70), wickcolor=color.new(flowColor, 70))
 
-// --- MARKINGS ---
-// New Longs Entering
-plotshape(newLongs, title="New Longs Entering", style=shape.triangleup, color=color.lime, size=size.small, location=location.top)
+// Also plot delta as histogram for visibility, offset
+plot(oiOffset + oiDelta, style=plot.style_line, color=color.new(flowColor, 70), title="OI Delta Hist", linewidth = 3)
 
-plotshape(newShorts, title="New Shorts Entering", style=shape.triangledown, color=color.red, size=size.small, location=location.top)
+// --- ARROWS ---
+plotarrow(newLongs ? oiDelta : 0, title="New Longs Arrow", colorup=color.lime, maxheight=20)
+plotarrow(newShorts ? oiDelta : 0, title="New Shorts Arrow", colordown=color.red, maxheight=20)
+plotarrow(shortsClosing ? oiDelta : 0, title="Shorts Closing Arrow", colorup=color.purple, maxheight=20)
+plotarrow(longsClosing ? oiDelta : 0, title="Longs Closing Arrow", colordown=color.orange, maxheight=20)
 
-plotshape(shortsClosing, title="Shorts Closing", style=shape.triangleup, color=color.purple, size=size.small, location=location.bottom)
+// --- UNDERWATER ZONES ---
+bgcolor(longsUnderwater ? color.new(color.yellow, 80) : na, title="Longs Underwater Zone")
+bgcolor(shortsUnderwater ? color.new(color.blue, 80) : na, title="Shorts Underwater Zone")
 
-plotshape(longsClosing, title="Longs Closing", style=shape.triangledown, color=color.orange, size=size.small,location=location.bottom)
+// Show entry prices (last only)
+plot(showPriceLiq ? longEntryPrice : na, title="Long Entry", color=color.lime, style=plot.style_stepline, linewidth=1)
+plot(showPriceLiq ? shortEntryPrice : na, title="Short Entry", color=color.red, style=plot.style_stepline, linewidth=1)
 
-plotshape(chopOrAbsorb, title="Chop / Absorption", style=shape.xcross, color=color.gray, size=size.tiny, location.absolute)
+// Show liquidation levels
+plot(showPriceLiq ? longLiq : na, title="Long Liq", color=color.orange, style=plot.style_stepline, linewidth=1)
+plot(showPriceLiq ? shortLiq : na, title="Short Liq", color=color.purple, style=plot.style_stepline, linewidth=1)
+
+// Show swing liquidation levels
+plot(showSwingLiq ? longSwingLiq : na, title="Long Swing Liq", color=color.orange, style=plot.style_stepline, linewidth=2)
+plot(showSwingLiq ? shortSwingLiq : na, title="Short Swing Liq", color=color.purple, style=plot.style_stepline, linewidth=2)
