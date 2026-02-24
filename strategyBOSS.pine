@@ -1,0 +1,365 @@
+//@version=5
+strategy("BOSS Strategy", overlay=true, max_lines_count=500, max_labels_count=500)
+
+//==============================================================================
+// SETTINGS
+//==============================================================================
+grpStrategy = "📊 Strategy Settings"
+leverage = input.float(10.0, "Leverage", minval=1, maxval=100, group=grpStrategy)
+stopLossPct = input.float(20.0, "Stop Loss %", minval=1, maxval=50, step=0.5, group=grpStrategy)
+riskPerTrade = input.float(1.0, "Risk Per Trade %", minval=0.1, maxval=10, step=0.1, group=grpStrategy)
+maxAdds = input.int(3, "Max Position Adds", minval=0, maxval=10, group=grpStrategy)
+useStopLoss = input.bool(true, "Use Stop Loss", group=grpStrategy)
+
+grpSignals = "🎯 Signal Settings"
+useTrendSignals = input.bool(true, "Use Trend Signals", group=grpSignals)
+useMRSignals = input.bool(true, "Use MR Signals", group=grpSignals)
+useSwingSignals = input.bool(true, "Use Swing Signals", group=grpSignals)
+useCVDIntensity = input.bool(false, "Use CVD Intensity", group=grpSignals)
+useCVDDiv = input.bool(true, "Use CVD Divergence", group=grpSignals)
+
+//==============================================================================
+// CHAOS DUAL - EMAs + Regime
+//==============================================================================
+ema21 = ta.ema(close, 21)
+ema55 = ta.ema(close, 55)
+ema100 = ta.ema(close, 100)
+ema200 = ta.ema(close, 200)
+
+// Directional Efficiency
+lengthEff = 20
+netMove = math.abs(close - close[lengthEff])
+totalMove = 0.0
+for i = 0 to lengthEff - 1
+    totalMove += math.abs(close[i] - close[i+1])
+efficiency = totalMove != 0 ? netMove / totalMove : 0
+trendRegime = efficiency > 0.4
+
+// Wick Dominance
+body = math.abs(close - open)
+upperWick = high - math.max(close, open)
+lowerWick = math.min(close, open) - low
+wickRatio = body != 0 ? (upperWick + lowerWick) / body : 0
+
+// Range Persistence
+atr = ta.atr(14)
+largeRange = (high - low) > atr * 1.2
+rangePersistence = math.sum(largeRange ? 1 : 0, 5)
+impulseCondition = rangePersistence >= 3
+
+// Final Regime
+isTrend = trendRegime and impulseCondition and wickRatio <= 2
+isSweep = not trendRegime or wickRatio > 2
+
+// Trend Structure
+bullStructure = ema21 > ema55 and ema55 > ema100
+bearStructure = ema21 < ema55 and ema55 < ema100
+
+// Chaos Signals
+trendBuy = isTrend and bullStructure and close > ema55
+trendSell = isTrend and bearStructure and close < ema55
+mrBuy = isSweep and close < ema21 and wickRatio > 2
+mrSell = isSweep and close > ema21 and wickRatio > 2
+
+//==============================================================================
+// SWING STRUCTURE (HH/HL/LH/LL)
+//==============================================================================
+rsiSource = input(title="RSI Source", defval=close, group="Swing Settings")
+rsiLength = input(title="RSI Length", defval=7, group="Swing Settings")
+rsiOverbought = input.int(title="RSI Overbought", defval=70, minval=51, maxval=100, group="Swing Settings")
+rsiOversold = input.int(title="RSI Oversold", defval=30, minval=1, maxval=49, group="Swing Settings")
+
+rsiValue = ta.rsi(rsiSource, rsiLength)
+isOverbought = rsiValue >= rsiOverbought
+isOversold = rsiValue <= rsiOversold
+
+var int laststate = 0
+var float hh = low
+var float ll = high
+
+var bool newSwingHigh = false
+var bool newSwingLow = false
+var string swingHighType = ""
+var string swingLowType = ""
+newSwingHigh := false
+newSwingLow := false
+swingHighType := ""
+swingLowType := ""
+
+var float last_actual_label_hh_price = 0.0
+var float last_actual_label_ll_price = 0.0
+
+obLabelText() => last_actual_label_hh_price < high ? "HH" : "LH"
+osLabelText() => last_actual_label_ll_price < low ? "HL" : "LL"
+
+if laststate == 0 and isOverbought
+    hh := high
+    laststate := 1
+
+if laststate == 0 and isOversold
+    ll := low
+    laststate := 2
+
+if laststate == 2 and isOverbought
+    hh := high
+    newSwingHigh := true
+    swingHighType := obLabelText()
+    last_actual_label_ll_price := ll
+    laststate := 1
+
+if laststate == 1 and isOversold
+    ll := low
+    newSwingLow := true
+    swingLowType := osLabelText()
+    last_actual_label_hh_price := hh
+    laststate := 2
+
+if laststate == 1 and isOverbought and high > hh
+    hh := high
+    newSwingHigh := true
+    swingHighType := obLabelText()
+
+if laststate == 2 and isOversold and low < ll
+    ll := low
+    newSwingLow := true
+    swingLowType := osLabelText()
+
+isHH = swingHighType == "HH"
+isLH = swingHighType == "LH"
+isHL = swingLowType == "HL"
+isLL = swingLowType == "LL"
+
+// Swing signals for strategy (LH = bearish, HL = bullish)
+swingShortSignal = newSwingHigh and isLH  // Lower High = short
+swingLongSignal = newSwingLow and isHL    // Higher Low = long
+
+//==============================================================================
+// CVD INTENSITY
+//==============================================================================
+lowerTF = input.timeframe("1", "Lower TF for Intensity")
+lookback = input.int(10, "Intensity Lookback", group="CVD Settings")
+
+f_intensity() =>
+    dir = close > open ? 1 : close < open ? -1 : 0
+    volume * math.abs(close - open) * dir
+
+intensity_ltf = request.security(syminfo.tickerid, lowerTF, f_intensity(), barmerge.gaps_off, barmerge.lookahead_off)
+
+netIntensity = bar_index >= lookback ? ta.cum(intensity_ltf) - ta.cum(intensity_ltf[lookback]) : na
+
+cvdBuySignal = netIntensity > 0 and netIntensity[1] <= 0
+cvdSellSignal = netIntensity < 0 and netIntensity[1] >= 0
+
+//==============================================================================
+// CVD DIVERGENCE
+//==============================================================================
+lowerTF2 = input.timeframe("1", "Lower TF for CVD")
+tfCVD = input.timeframe("D", "CVD Reset")
+newDay = ta.change(time(tfCVD)) != 0
+
+vol_ltf = request.security(syminfo.tickerid, lowerTF2, volume, barmerge.gaps_off, barmerge.lookahead_off)
+close_ltf = request.security(syminfo.tickerid, lowerTF2, close, barmerge.gaps_off, barmerge.lookahead_off)
+open_ltf = request.security(syminfo.tickerid, lowerTF2, open, barmerge.gaps_off, barmerge.lookahead_off)
+
+dir_ltf = close_ltf > open_ltf ? 1 : close_ltf < open_ltf ? -1 : 0
+var float cvd_ltf = 0
+cvd_ltf := newDay ? 0 : nz(cvd_ltf[1]) + vol_ltf * dir_ltf
+
+// Bullish divergence
+var float anchorPrice = na
+var float anchorCVD = na
+
+if newDay
+    anchorPrice := na
+    anchorCVD := na
+
+if na(anchorCVD) or cvd_ltf < anchorCVD
+    anchorCVD := cvd_ltf
+    anchorPrice := low
+
+var float bullDivPrice = na
+var bool bullDiv = false
+
+if not na(anchorPrice)
+    if na(bullDivPrice) and low < anchorPrice and cvd_ltf > anchorCVD
+        bullDiv := true
+        bullDivPrice := low
+    if not na(bullDivPrice) and low < bullDivPrice and cvd_ltf > anchorCVD
+        bullDiv := true
+        bullDivPrice := low
+    if not na(bullDivPrice) and cvd_ltf <= anchorCVD
+        bullDiv := false
+        bullDivPrice := na
+
+// Bearish divergence
+var float bearAnchorPrice = na
+var float bearAnchorCVD = na
+
+if newDay
+    bearAnchorPrice := na
+    bearAnchorCVD := na
+
+if na(bearAnchorCVD) or cvd_ltf > bearAnchorCVD
+    bearAnchorCVD := cvd_ltf
+    bearAnchorPrice := high
+
+var float bearDivPrice = na
+var bool bearDiv = false
+
+if not na(bearAnchorPrice)
+    if na(bearDivPrice) and high > bearAnchorPrice and cvd_ltf < bearAnchorCVD
+        bearDiv := true
+        bearDivPrice := high
+    if not na(bearDivPrice) and high > bearDivPrice and cvd_ltf < bearAnchorCVD
+        bearDiv := true
+        bearDivPrice := high
+    if not na(bearDivPrice) and cvd_ltf >= bearAnchorCVD
+        bearDiv := false
+        bearDivPrice := na
+
+//==============================================================================
+// COMBINED SIGNALS
+//==============================================================================
+longSignal = (useTrendSignals and trendBuy) or (useMRSignals and mrBuy) or (useSwingSignals and swingLongSignal) or (useCVDIntensity and cvdBuySignal) or (useCVDDiv and bullDiv)
+shortSignal = (useTrendSignals and trendSell) or (useMRSignals and mrSell) or (useSwingSignals and swingShortSignal) or (useCVDIntensity and cvdSellSignal) or (useCVDDiv and bearDiv)
+
+//==============================================================================
+// PLOT EMA RIBBON
+//==============================================================================
+plot(ema21, color=color.teal, linewidth=2)
+plot(ema55, color=color.orange, linewidth=2)
+plot(ema100, color=color.blue, linewidth=2)
+plot(ema200, color=color.red, linewidth=2)
+
+//==============================================================================
+// STRATEGY STATE MACHINE
+//==============================================================================
+var int stratState = 0  // 0=FLAT, 1=LONG, 2=SHORT
+var float avgEntryPrice = na
+var int addCount = 0
+var float slLevel = na
+var float totalPositionQty = 0.0
+
+calcPositionSize() =>
+    equity = strategy.equity
+    equity := equity > 0 ? equity : 10000  // fallback if equity is 0
+    riskAmt = equity * (riskPerTrade / 100)
+    stopDist = close * (stopLossPct / 100)
+    stopDist > 0.001 ? math.abs((riskAmt / stopDist) * close) : math.abs(equity * leverage / 100)
+
+slLongHit = useStopLoss and not na(slLevel) and low <= slLevel
+slShortHit = useStopLoss and not na(slLevel) and high >= slLevel
+
+var int lastAddBar = -100
+
+// Entry logic - only enter on fresh signal (was flat last bar)
+if stratState == 0
+    if longSignal
+        qty = calcPositionSize()
+        strategy.entry("Long", strategy.long, qty=qty)
+        stratState := 1
+        avgEntryPrice := close
+        addCount := 0
+        slLevel := close * (1 - stopLossPct / 100)
+        totalPositionQty := qty
+        lastAddBar := bar_index
+    else if shortSignal
+        qty = calcPositionSize()
+        strategy.entry("Short", strategy.short, qty=qty)
+        stratState := 2
+        avgEntryPrice := close
+        addCount := 0
+        slLevel := close * (1 + stopLossPct / 100)
+        totalPositionQty := qty
+        lastAddBar := bar_index
+
+else if stratState == 1
+    if slLongHit
+        strategy.close("Long")
+        strategy.close("LongAdd")
+        stratState := 0
+        addCount := 0
+        slLevel := na
+        totalPositionQty := 0
+    else if shortSignal
+        strategy.close("Long")
+        strategy.close("LongAdd")
+        qty = calcPositionSize()
+        strategy.entry("Short", strategy.short, qty=qty)
+        stratState := 2
+        avgEntryPrice := close
+        addCount := 0
+        slLevel := close * (1 + stopLossPct / 100)
+        totalPositionQty := qty
+        lastAddBar := bar_index
+    else if longSignal and addCount < maxAdds and (bar_index - lastAddBar > 3)
+        qty = calcPositionSize()
+        strategy.entry("LongAdd", strategy.long, qty=qty)
+        addCount += 1
+        totalPositionQty := totalPositionQty + qty
+        if totalPositionQty > 0
+            avgEntryPrice := ((avgEntryPrice * (totalPositionQty - qty)) + (close * qty)) / totalPositionQty
+        slLevel := avgEntryPrice * (1 - stopLossPct / 100)
+        lastAddBar := bar_index
+
+else if stratState == 2
+    if slShortHit
+        strategy.close("Short")
+        strategy.close("ShortAdd")
+        stratState := 0
+        addCount := 0
+        slLevel := na
+        totalPositionQty := 0
+    else if longSignal
+        strategy.close("Short")
+        strategy.close("ShortAdd")
+        qty = calcPositionSize()
+        strategy.entry("Long", strategy.long, qty=qty)
+        stratState := 1
+        avgEntryPrice := close
+        addCount := 0
+        slLevel := close * (1 - stopLossPct / 100)
+        totalPositionQty := qty
+        lastAddBar := bar_index
+    else if shortSignal and addCount < maxAdds and (bar_index - lastAddBar > 3)
+        qty = calcPositionSize()
+        strategy.entry("ShortAdd", strategy.short, qty=qty)
+        addCount += 1
+        totalPositionQty := totalPositionQty + qty
+        if totalPositionQty > 0
+            avgEntryPrice := ((avgEntryPrice * (totalPositionQty - qty)) + (close * qty)) / totalPositionQty
+        slLevel := avgEntryPrice * (1 + stopLossPct / 100)
+        lastAddBar := bar_index
+
+//==============================================================================
+// PLOTS
+//==============================================================================
+plot(slLevel, title="Stop Loss", color=color.red, style=plot.style_stepline, linewidth=2)
+plot(avgEntryPrice, title="Avg Entry", color=color.yellow, style=plot.style_stepline, linewidth=1)
+
+// Entry signals
+plotshape(stratState == 1 and stratState[1] != 1, title="Enter Long", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small)
+plotshape(stratState == 2 and stratState[1] != 2, title="Enter Short", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small)
+
+// Position adds
+plotshape(stratState == 1 and stratState[1] == 1 and addCount > addCount[1], title="Add Long", style=shape.circle, location=location.belowbar, color=color.lime, size=size.tiny)
+plotshape(stratState == 2 and stratState[1] == 2 and addCount > addCount[1], title="Add Short", style=shape.circle, location=location.abovebar, color=color.orange, size=size.tiny)
+
+// Background
+bgcolor(stratState == 1 ? color.new(color.green, 85) : stratState == 2 ? color.new(color.red, 85) : na, title="Position Background")
+
+// Info table
+var table infoTable = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 80), border_width=1)
+if barstate.islast
+    table.cell(infoTable, 0, 0, "State", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 0, stratState == 1 ? "LONG" : stratState == 2 ? "SHORT" : "FLAT", text_color=stratState == 1 ? color.green : stratState == 2 ? color.red : color.gray, text_size=size.small)
+    table.cell(infoTable, 0, 1, "Position", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 1, stratState == 0 ? "-" : str.tostring(totalPositionQty, "#.##"), text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 0, 2, "Adds", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 2, str.tostring(addCount), text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 0, 3, "Stop Loss", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 3, na(slLevel) ? "-" : str.tostring(slLevel, "#.##"), text_color=color.red, text_size=size.small)
+    table.cell(infoTable, 0, 4, "Equity", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 4, str.tostring(strategy.equity, "#.##"), text_color=color.yellow, text_size=size.small)
+    table.cell(infoTable, 0, 5, "Risk", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 5, str.tostring(riskPerTrade) + "% ($" + str.tostring(strategy.equity * riskPerTrade / 100, "#.##") + ")", text_color=color.orange, text_size=size.small)

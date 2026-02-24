@@ -1,0 +1,251 @@
+//@version=5
+strategy("Vector Extreme Strategy", overlay=true, max_lines_count=500, default_qty_type=strategy.percent_of_equity, default_qty_value=1, initial_capital=10000, currency=currency.USD, commission_type=strategy.commission.percent, commission_value=0.075)
+
+//==============================================================================
+// SETTINGS
+//==============================================================================
+grpStrategy = "📊 Strategy Settings"
+leverage = input.float(10.0, "Leverage", minval=1, maxval=100, group=grpStrategy)
+stopLossPct = input.float(20.0, "Stop Loss %", minval=1, maxval=50, step=0.5, group=grpStrategy)
+riskPerTrade = input.float(1.0, "Risk Per Trade %", minval=0.1, maxval=10, step=0.1, group=grpStrategy)
+maxAdds = input.int(3, "Max Position Adds", minval=0, maxval=10, group=grpStrategy)
+useStopLoss = input.bool(true, "Use Stop Loss", group=grpStrategy)
+
+//==============================================================================
+// WATSON (NWE) - Already included in indicator
+//==============================================================================
+grpWatson = "🟣 Watson"
+h = input.float(8.,'Bandwidth', minval = 0, group=grpWatson)
+mult = input.float(3., minval = 0, group=grpWatson)
+src = input(close, 'Source', group=grpWatson)
+repaint = input(true, 'Repainting Smoothing', group=grpWatson)
+upCss = input.color(color.teal, 'Colors', inline = 'inline1', group=grpWatson)
+dnCss = input.color(color.red, '', inline = 'inline1', group=grpWatson)
+
+// Watson calculation
+gauss(x, h) => math.exp(-(math.pow(x, 2)/(h * h * 2)))
+n = bar_index
+var coefs = array.new_float(0)
+var den = 0.
+if barstate.isfirst and not repaint
+    for i = 0 to 499
+        w = gauss(i, h)
+        coefs.push(w)
+    den := coefs.sum()
+out = 0.
+if not repaint
+    for i = 0 to 499
+        out += src[i] * coefs.get(i)
+out /= den
+mae = ta.sma(math.abs(src - out), 499) * mult
+upper = out + mae
+lower = out - mae
+
+// Watson signals
+watsonOversold = ta.crossunder(close, lower)
+watsonOverbought = ta.crossover(close, upper)
+
+//==============================================================================
+// VECTOR CANDLES (PVSRA)
+//==============================================================================
+grpVector = "🔴 Vectors"
+pvsra_volume = volume
+pvsra_high = high
+pvsra_low = low
+pvsra_close = close
+pvsra_open = open
+
+sum_1 = math.sum(pvsra_volume, 10)
+av = sum_1 / 10
+value2 = pvsra_volume * (pvsra_high - pvsra_low)
+hivalue2 = ta.highest(value2, 10)
+
+iff_1 = pvsra_volume >= av * 1.5 ? 2 : 0
+iff_2 = pvsra_volume >= av * 2 or value2 >= hivalue2 ? 1 : iff_1
+va = iff_2
+
+isBull = pvsra_close > pvsra_open
+CUColor = color.lime
+CDColor = color.red
+AUColor = color.rgb(33, 170, 255)
+ADColor = color.fuchsia
+NUColor = #9b9b9b
+NDColor = #414141
+
+iff_5 = va == 2 ? AUColor : NUColor
+iff_6 = va == 1 ? CUColor : iff_5
+iff_7 = va == 2 ? ADColor : NDColor
+iff_8 = va == 1 ? CDColor : iff_7
+candleColor = isBull ? iff_6 : iff_8
+
+// Vector signals
+isClimaxUp = candleColor == color.lime
+isClimaxDown = candleColor == color.red
+isAboveAvgUp = candleColor == AUColor
+isAboveAvgDown = candleColor == ADColor
+
+//==============================================================================
+// OI DELTA
+//==============================================================================
+grpLiqOI = "💧 Liq + OI"
+liqPct = input.float(1.0, "Liq %", minval=0.1, maxval=5, group=grpLiqOI)
+swingLookback = input.int(5, "Swing Lookback", minval=1, maxval=20, group=grpLiqOI)
+
+symbolPriceOI = "BINANCE:BTCUSDT.P"
+symbolOI = "BINANCE:BTCUSDT.P_OI"
+
+price = request.security(symbolPriceOI, timeframe.period, close)
+oi = request.security(symbolOI, timeframe.period, close)
+
+oiDelta = oi - oi[1]
+priceDelta = price - price[1]
+
+newLongs = priceDelta > 0 and oiDelta > 0
+newShorts = priceDelta < 0 and oiDelta > 0
+shortsClosing = priceDelta > 0 and oiDelta < 0
+longsClosing = priceDelta < 0 and oiDelta < 0
+chopOrAbsorb = math.abs(oiDelta) <= 0.1 * math.abs(priceDelta)
+
+//==============================================================================
+// ENTRY TRACKING
+//==============================================================================
+var float longEntryPrice = na
+var float shortEntryPrice = na
+
+if newLongs
+    longEntryPrice := price
+if newShorts
+    shortEntryPrice := price
+
+longLiq = not na(longEntryPrice) ? longEntryPrice * (1 - liqPct / 100) : na
+shortLiq = not na(shortEntryPrice) ? shortEntryPrice * (1 + liqPct / 100) : na
+
+swingHigh = ta.highest(high, swingLookback)
+swingLow = ta.lowest(low, swingLookback)
+longSwingLiq = swingLow * (1 - liqPct / 100)
+shortSwingLiq = swingHigh * (1 + liqPct / 100)
+
+//==============================================================================
+// STRATEGY STATE MACHINE
+//==============================================================================
+var int stratState = 0  // 0=FLAT, 1=LONG, 2=SHORT
+var float avgEntryPrice = na
+var int addCount = 0
+var float slLevel = na
+var float totalPositionQty = 0.0
+
+calcPositionSize() =>
+    equity = strategy.equity
+    riskAmt = equity * (riskPerTrade / 100)
+    stopDist = close * (stopLossPct / 100)
+    stopDist > 0 ? (riskAmt / stopDist) * close : (equity * leverage / 100)
+
+slLongHit = useStopLoss and not na(slLevel) and low <= slLevel
+slShortHit = useStopLoss and not na(slLevel) and high >= slLevel
+
+// Combined signals
+longSignal = newLongs and not chopOrAbsorb
+shortSignal = newShorts and not chopOrAbsorb
+
+// Entry logic
+if stratState == 0
+    if longSignal
+        qty = calcPositionSize()
+        strategy.entry("Long", strategy.long, qty=qty)
+        stratState := 1
+        avgEntryPrice := close
+        addCount := 0
+        slLevel := close * (1 - stopLossPct / 100)
+        totalPositionQty := qty
+    else if shortSignal
+        qty = calcPositionSize()
+        strategy.entry("Short", strategy.short, qty=qty)
+        stratState := 2
+        avgEntryPrice := close
+        addCount := 0
+        slLevel := close * (1 + stopLossPct / 100)
+        totalPositionQty := qty
+
+else if stratState == 1
+    if slLongHit
+        strategy.close("Long")
+        strategy.close("LongAdd")
+        stratState := 0
+        addCount := 0
+        slLevel := na
+        totalPositionQty := 0
+    else if shortSignal
+        strategy.close("Long")
+        strategy.close("LongAdd")
+        qty = calcPositionSize()
+        strategy.entry("Short", strategy.short, qty=qty)
+        stratState := 2
+        avgEntryPrice := close
+        addCount := 0
+        slLevel := close * (1 + stopLossPct / 100)
+        totalPositionQty := qty
+    else if longSignal and addCount < maxAdds
+        qty = calcPositionSize()
+        strategy.entry("LongAdd", strategy.long, qty=qty)
+        addCount += 1
+        totalPositionQty := totalPositionQty + qty
+        if totalPositionQty > 0
+            avgEntryPrice := ((avgEntryPrice * (totalPositionQty - qty)) + (close * qty)) / totalPositionQty
+        slLevel := avgEntryPrice * (1 - stopLossPct / 100)
+
+else if stratState == 2
+    if slShortHit
+        strategy.close("Short")
+        strategy.close("ShortAdd")
+        stratState := 0
+        addCount := 0
+        slLevel := na
+        totalPositionQty := 0
+    else if longSignal
+        strategy.close("Short")
+        strategy.close("ShortAdd")
+        qty = calcPositionSize()
+        strategy.entry("Long", strategy.long, qty=qty)
+        stratState := 1
+        avgEntryPrice := close
+        addCount := 0
+        slLevel := close * (1 - stopLossPct / 100)
+        totalPositionQty := qty
+    else if shortSignal and addCount < maxAdds
+        qty = calcPositionSize()
+        strategy.entry("ShortAdd", strategy.short, qty=qty)
+        addCount += 1
+        totalPositionQty := totalPositionQty + qty
+        if totalPositionQty > 0
+            avgEntryPrice := ((avgEntryPrice * (totalPositionQty - qty)) + (close * qty)) / totalPositionQty
+        slLevel := avgEntryPrice * (1 + stopLossPct / 100)
+
+//==============================================================================
+// PLOTS
+//==============================================================================
+plot(slLevel, title="Stop Loss", color=color.red, style=plot.style_stepline, linewidth=2)
+plot(avgEntryPrice, title="Avg Entry", color=color.yellow, style=plot.style_stepline, linewidth=1)
+
+plotshape(stratState == 1 and stratState[1] != 1, title="Enter Long", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small)
+plotshape(stratState == 2 and stratState[1] != 2, title="Enter Short", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small)
+plotshape(stratState == 1 and stratState[1] == 1 and addCount > addCount[1], title="Add Long", style=shape.circle, location=location.belowbar, color=color.lime, size=size.tiny)
+plotshape(stratState == 2 and stratState[1] == 2 and addCount > addCount[1], title="Add Short", style=shape.circle, location=location.abovebar, color=color.orange, size=size.tiny)
+
+// Background
+bgcolor(stratState == 1 ? color.new(color.green, 85) : stratState == 2 ? color.new(color.red, 85) : na, title="Position Background")
+
+// Info table
+var table infoTable = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 80), border_width=1)
+if barstate.islast
+    table.cell(infoTable, 0, 0, "State", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 0, stratState == 1 ? "LONG" : stratState == 2 ? "SHORT" : "FLAT", text_color=stratState == 1 ? color.green : stratState == 2 ? color.red : color.gray, text_size=size.small)
+    table.cell(infoTable, 0, 1, "Position", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 1, stratState == 0 ? "-" : str.tostring(totalPositionQty, "#.##"), text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 0, 2, "Adds", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 2, str.tostring(addCount), text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 0, 3, "Stop Loss", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 3, na(slLevel) ? "-" : str.tostring(slLevel, "#.##"), text_color=color.red, text_size=size.small)
+    table.cell(infoTable, 0, 4, "Equity", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 4, str.tostring(strategy.equity, "#.##"), text_color=color.yellow, text_size=size.small)
+    table.cell(infoTable, 0, 5, "Risk", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 5, str.tostring(riskPerTrade) + "% ($" + str.tostring(strategy.equity * riskPerTrade / 100, "#.##") + ")", text_color=color.orange, text_size=size.small)
