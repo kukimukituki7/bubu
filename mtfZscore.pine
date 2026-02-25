@@ -1,0 +1,53 @@
+//@version=5
+indicator("MTF Z-Score with Dual Modes (Plotted HTF)", overlay=false)
+
+// === Inputs ===
+length  = input.int(50, "Z Length")
+htf_tf  = input.timeframe("240", "Higher Timeframe")
+
+mode = input.string(     "HTF Trend Filter",     "Background Mode",     options = ["HTF Trend Filter", "HTF Mean Reversion"])
+
+// === Z-Score Function ===
+f_zscore(src, len) =>
+    mean = ta.sma(src, len)
+    std  = ta.stdev(src, len)
+    (src - mean) / std
+
+// === Current TF ===
+z_current = f_zscore(close, length)
+
+// === Higher TF ===
+z_htf = request.security(syminfo.tickerid, htf_tf, f_zscore(close, length))
+
+// === Plot Z-Scores ===
+plot(z_current, color=color.blue, linewidth=3, title="Current TF Z")
+plot(z_htf, color=color.orange, linewidth=1, title="Higher TF Z")
+
+// === Levels ===
+hline(0, "Mean", color=color.gray)
+
+hline(1.5, "+1.5", color=color.new(color.orange, 40))
+hline(2.0, "+2.0", color=color.new(color.red, 30))
+hline(2.5, "+2.5", color=color.new(color.red, 10))
+hline(3.0, "+3.0", color=color.red)
+
+hline(-1.5, "-1.5", color=color.new(color.orange, 40))
+hline(-2.0, "-2.0", color=color.new(color.green, 30))
+hline(-2.5, "-2.5", color=color.new(color.green, 10))
+hline(-3.0, "-3.0", color=color.green)
+
+// === Background Modes ===
+
+// Mode 1: Trade WITH HTF
+trend_bg =
+     z_htf > 0 ? color.new(color.green, 85) :
+     z_htf < 0 ? color.new(color.red, 85) :
+     na
+
+// Mode 2: Fade HTF
+reversion_bg =
+     z_htf > 0 ? color.new(color.red, 85) :
+     z_htf < 0 ? color.new(color.green, 85) :
+     na
+
+bgcolor(mode == "HTF Trend Filter" ? trend_bg : reversion_bg)
