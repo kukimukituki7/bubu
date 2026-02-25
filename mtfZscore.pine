@@ -5,6 +5,25 @@ indicator("MTF Z-Score with Dual Modes (Plotted HTF)", overlay=false)
 length  = input.int(50, "Z Length")
 htf_tf  = input.timeframe("240", "Higher Timeframe")
 
+z_level_1 = input.float(3.0, "Z Level 1")
+z_level_2 = input.float(2.5, "Z Level 2")
+z_level_3 = input.float(2.0, "Z Level 3")
+z_level_4 = input.float(1.5, "Z Level 4")
+z_level_5 = input.float(0.0, "Z Level 5")
+z_level_6 = input.float(-1.5, "Z Level 6")
+z_level_7 = input.float(-2.0, "Z Level 7")
+z_level_8 = input.float(-2.5, "Z Level 8")
+z_level_9 = input.float(-3.0, "Z Level 9")
+
+transp_3  = input.int(80, "Transparency ±3", 0, 100)
+transp_25 = input.int(85, "Transparency ±2.5", 0, 100)
+transp_2  = input.int(90, "Transparency ±2", 0, 100)
+transp_15 = input.int(85, "Transparency ±1.5", 0, 100)
+transp_0  = input.int(80, "Transparency 0", 0, 100)
+transp_price = input.int(0, "Price Column Transparency", 0, 100)
+table_size = input.string(size.normal, "Table Size", options=[size.auto, size.tiny, size.small, size.normal, size.large, size.huge])
+lookback = input.int(20, "Hit Lookback Bars")
+
 mode = input.string(     "HTF Trend Filter",     "Background Mode",     options = ["HTF Trend Filter", "HTF Mean Reversion"])
 
 // === Z-Score Function ===
@@ -13,8 +32,13 @@ f_zscore(src, len) =>
     std  = ta.stdev(src, len)
     (src - mean) / std
 
+f_mean(src, len) => ta.sma(src, len)
+f_std(src, len) => ta.stdev(src, len)
+
 // === Current TF ===
 z_current = f_zscore(close, length)
+z_mean = f_mean(close, length)
+z_std = f_std(close, length)
 
 // === Higher TF ===
 z_htf = request.security(syminfo.tickerid, htf_tf, f_zscore(close, length))
@@ -51,3 +75,68 @@ reversion_bg =
      na
 
 bgcolor(mode == "HTF Trend Filter" ? trend_bg : reversion_bg)
+
+// === Price Scoreboard ===
+var table scoreboard = table.new(position.top_left, 10, 3, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+
+get_z_color(val) => val > 1.0 ? color.red : val > 0.25 ? color.orange : val > -0.25 ? color.gray : val > -1.0 ? color.orange : color.green
+
+f_level_hit(price_level) =>
+    hit = false
+    current_price = z_mean + price_level * z_std
+    for i = 1 to lookback
+        if low[i] <= current_price and high[i] >= current_price
+            hit := true
+            break
+    hit
+
+if barstate.islast
+    table.cell(scoreboard, 0, 0, "Z-Score", bgcolor=color.gray, text_color=color.white, text_size=table_size)
+    table.cell(scoreboard, 0, 1, "Price", bgcolor=color.gray, text_color=color.white, text_size=table_size)
+    table.cell(scoreboard, 0, 2, "Hit(" + str.tostring(lookback) + ")", bgcolor=color.new(color.gray, transp_price), text_color=color.white, text_size=table_size)
+    
+    hit_1 = f_level_hit(z_level_1)
+    hit_2 = f_level_hit(z_level_2)
+    hit_3 = f_level_hit(z_level_3)
+    hit_4 = f_level_hit(z_level_4)
+    hit_5 = f_level_hit(z_level_5)
+    hit_6 = f_level_hit(z_level_6)
+    hit_7 = f_level_hit(z_level_7)
+    hit_8 = f_level_hit(z_level_8)
+    hit_9 = f_level_hit(z_level_9)
+    
+    table.cell(scoreboard, 1, 0, str.tostring(z_level_1), bgcolor=color.new(get_z_color(z_level_1), transp_price), text_size=table_size)
+    table.cell(scoreboard, 1, 1, str.tostring(z_mean + z_level_1 * z_std, format.mintick), bgcolor=color.new(get_z_color(z_level_1), transp_price), text_size=table_size)
+    table.cell(scoreboard, 1, 2, hit_1 ? "✓" : "-", bgcolor=hit_1 ? color.new(color.lime, transp_price) : color.new(color.gray, transp_price), text_size=table_size)
+    
+    table.cell(scoreboard, 2, 0, str.tostring(z_level_2), bgcolor=color.new(get_z_color(z_level_2), transp_price), text_size=table_size)
+    table.cell(scoreboard, 2, 1, str.tostring(z_mean + z_level_2 * z_std, format.mintick), bgcolor=color.new(get_z_color(z_level_2), transp_price), text_size=table_size)
+    table.cell(scoreboard, 2, 2, hit_2 ? "✓" : "-", bgcolor=hit_2 ? color.new(color.lime, transp_price) : color.new(color.gray, transp_price), text_size=table_size)
+    
+    table.cell(scoreboard, 3, 0, str.tostring(z_level_3), bgcolor=color.new(get_z_color(z_level_3), transp_price), text_size=table_size)
+    table.cell(scoreboard, 3, 1, str.tostring(z_mean + z_level_3 * z_std, format.mintick), bgcolor=color.new(get_z_color(z_level_3), transp_price), text_size=table_size)
+    table.cell(scoreboard, 3, 2, hit_3 ? "✓" : "-", bgcolor=hit_3 ? color.new(color.lime, transp_price) : color.new(color.gray, transp_price), text_size=table_size)
+    
+    table.cell(scoreboard, 4, 0, str.tostring(z_level_4), bgcolor=color.new(get_z_color(z_level_4), transp_price), text_size=table_size)
+    table.cell(scoreboard, 4, 1, str.tostring(z_mean + z_level_4 * z_std, format.mintick), bgcolor=color.new(get_z_color(z_level_4), transp_price), text_size=table_size)
+    table.cell(scoreboard, 4, 2, hit_4 ? "✓" : "-", bgcolor=hit_4 ? color.new(color.lime, transp_price) : color.new(color.gray, transp_price), text_size=table_size)
+    
+    table.cell(scoreboard, 5, 0, str.tostring(z_level_5), bgcolor=color.new(get_z_color(z_level_5), transp_price), text_size=table_size)
+    table.cell(scoreboard, 5, 1, str.tostring(z_mean + z_level_5 * z_std, format.mintick), bgcolor=color.new(get_z_color(z_level_5), transp_price), text_size=table_size)
+    table.cell(scoreboard, 5, 2, hit_5 ? "✓" : "-", bgcolor=hit_5 ? color.new(color.lime, transp_price) : color.new(color.gray, transp_price), text_size=table_size)
+    
+    table.cell(scoreboard, 6, 0, str.tostring(z_level_6), bgcolor=color.new(get_z_color(z_level_6), transp_price), text_size=table_size)
+    table.cell(scoreboard, 6, 1, str.tostring(z_mean + z_level_6 * z_std, format.mintick), bgcolor=color.new(get_z_color(z_level_6), transp_price), text_size=table_size)
+    table.cell(scoreboard, 6, 2, hit_6 ? "✓" : "-", bgcolor=hit_6 ? color.new(color.lime, transp_price) : color.new(color.gray, transp_price), text_size=table_size)
+    
+    table.cell(scoreboard, 7, 0, str.tostring(z_level_7), bgcolor=color.new(get_z_color(z_level_7), transp_price), text_size=table_size)
+    table.cell(scoreboard, 7, 1, str.tostring(z_mean + z_level_7 * z_std, format.mintick), bgcolor=color.new(get_z_color(z_level_7), transp_price), text_size=table_size)
+    table.cell(scoreboard, 7, 2, hit_7 ? "✓" : "-", bgcolor=hit_7 ? color.new(color.lime, transp_price) : color.new(color.gray, transp_price), text_size=table_size)
+    
+    table.cell(scoreboard, 8, 0, str.tostring(z_level_8), bgcolor=color.new(get_z_color(z_level_8), transp_price), text_size=table_size)
+    table.cell(scoreboard, 8, 1, str.tostring(z_mean + z_level_8 * z_std, format.mintick), bgcolor=color.new(get_z_color(z_level_8), transp_price), text_size=table_size)
+    table.cell(scoreboard, 8, 2, hit_8 ? "✓" : "-", bgcolor=hit_8 ? color.new(color.lime, transp_price) : color.new(color.gray, transp_price), text_size=table_size)
+    
+    table.cell(scoreboard, 9, 0, str.tostring(z_level_9), bgcolor=color.new(get_z_color(z_level_9), transp_price), text_size=table_size)
+    table.cell(scoreboard, 9, 1, str.tostring(z_mean + z_level_9 * z_std, format.mintick), bgcolor=color.new(get_z_color(z_level_9), transp_price), text_size=table_size)
+    table.cell(scoreboard, 9, 2, hit_9 ? "✓" : "-", bgcolor=hit_9 ? color.new(color.lime, transp_price) : color.new(color.gray, transp_price), text_size=table_size)
